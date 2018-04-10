@@ -281,7 +281,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		AlterTSConfigurationStmt AlterTSDictionaryStmt
 		CreateMatViewStmt RefreshMatViewStmt CreateAmStmt
 		CreatePublicationStmt AlterPublicationStmt
-		CreateSubscriptionStmt AlterSubscriptionStmt DropSubscriptionStmt
+		CreateSubscriptionStmt AlterSubscriptionStmt DropSubscriptionStmt UnloadStmt
 
 %type <node>	select_no_parens select_with_parens select_clause
 				simple_select values_clause
@@ -395,7 +395,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				relation_expr_list dostmt_opt_list
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
-				publication_name_list
+				publication_name_list OptDistKey OptSortKey OptDistStyle
 
 %type <list>	group_by_list
 %type <node>	group_by_item empty_grouping_set rollup_clause cube_clause
@@ -578,6 +578,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <partboundspec> ForValues
 %type <node>		partbound_datum PartitionRangeDatum
 %type <list>		partbound_datum_list range_datum_list
+%type <list>		AwsAuth 
+%type <keyword>		OptUnloadOption UnloadOption OptParallel
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -601,42 +603,42 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
  */
 
 /* ordinary key words in alphabetical order */
-%token <keyword> ABORT_P ABSOLUTE_P ACCESS ACTION ADD_P ADMIN AFTER
-	AGGREGATE ALL ALSO ALTER ALWAYS ANALYSE ANALYZE AND ANY ARRAY AS ASC
+%token <keyword> ABORT_P ABSOLUTE_P ACCESS ACCESS_KEY_ID ACTION ADD_P ADDQUOTES ADMIN AFTER
+	AGGREGATE ALL ALLOWOVERWRITE ALSO ALTER ALWAYS ANALYSE ANALYZE AND ANY ARRAY AS ASC
 	ASSERTION ASSIGNMENT ASYMMETRIC AT ATTACH ATTRIBUTE AUTHORIZATION
 
 	BACKWARD BEFORE BEGIN_P BETWEEN BIGINT BINARY BIT
-	BOOLEAN_P BOTH BY
+	BOOLEAN_P BOTH BY BZIP2
 
 	CACHE CALLED CASCADE CASCADED CASE CAST CATALOG_P CHAIN CHAR_P
 	CHARACTER CHARACTERISTICS CHECK CHECKPOINT CLASS CLOSE
 	CLUSTER COALESCE COLLATE COLLATION COLUMN COLUMNS COMMENT COMMENTS COMMIT
-	COMMITTED CONCURRENTLY CONFIGURATION CONFLICT CONNECTION CONSTRAINT
-	CONSTRAINTS CONTENT_P CONTINUE_P CONVERSION_P COPY COST CREATE
+	COMMITTED COMPOUND CONCURRENTLY CONFIGURATION CONFLICT CONNECTION CONSTRAINT
+	CONSTRAINTS CONTENT_P CONTINUE_P CONVERSION_P COPY COST CREDENTIALS CREATE
 	CROSS CSV CUBE CURRENT_P
 	CURRENT_CATALOG CURRENT_DATE CURRENT_ROLE CURRENT_SCHEMA
 	CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR CYCLE
 
 	DATA_P DATABASE DAY_P DEALLOCATE DEC DECIMAL_P DECLARE DEFAULT DEFAULTS
 	DEFERRABLE DEFERRED DEFINER DELETE_P DELIMITER DELIMITERS DEPENDS DESC
-	DETACH DICTIONARY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P
+	DETACH DICTIONARY DISABLE_P DISCARD DISTINCT DISTKEY DISTSTYLE DO DOCUMENT_P DOMAIN_P
 	DOUBLE_P DROP
 
-	EACH ELSE ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ESCAPE EVENT EXCEPT
+	EACH ELSE ENABLE_P ENCODE ENCODING ENCRYPTED END_P ENUM_P ESCAPE EVEN EVENT EXCEPT
 	EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPLAIN
 	EXTENSION EXTERNAL EXTRACT
 
-	FALSE_P FAMILY FETCH FILTER FIRST_P FLOAT_P FOLLOWING FOR
+	FALSE_P FAMILY FETCH FILTER FIRST_P FIXEDWIDTH FLOAT_P FOLLOWING FOR
 	FORCE FOREIGN FORWARD FREEZE FROM FULL FUNCTION FUNCTIONS
 
-	GENERATED GLOBAL GRANT GRANTED GREATEST GROUP_P GROUPING
+	GENERATED GLOBAL GRANT GRANTED GREATEST GROUP_P GROUPING GZIP
 
 	HANDLER HAVING HEADER_P HOLD HOUR_P
 
-	IDENTITY_P IF_P ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P
+	IAM_ROLE IDENTITY_P IF_P IGNOREHEADER ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P
 	INCLUDING INCREMENT INDEX INDEXES INHERIT INHERITS INITIALLY INLINE_P
 	INNER_P INOUT INPUT_P INSENSITIVE INSERT INSTEAD INT_P INTEGER
-	INTERSECT INTERVAL INTO INVOKER IS ISNULL ISOLATION
+	INTERLEAVED INTERSECT INTERVAL INTO INVOKER IS ISNULL ISOLATION
 
 	JOIN
 
@@ -646,7 +648,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED
 
-	MAPPING MATCH MATERIALIZED MAXVALUE METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
+	MANIFEST MAPPING MATCH MATERIALIZED MAX MAXFILESIZE MAXVALUE METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
 
 	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NO NONE
 	NOT NOTHING NOTIFY NOTNULL NOWAIT NULL_P NULLIF
@@ -666,9 +668,9 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	RESET RESTART RESTRICT RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
 	ROW ROWS RULE
 
-	SAVEPOINT SCHEMA SCHEMAS SCROLL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
-	SERIALIZABLE SERVER SESSION SESSION_USER SET SETS SETOF SHARE SHOW
-	SIMILAR SIMPLE SKIP SMALLINT SNAPSHOT SOME SQL_P STABLE STANDALONE_P
+	SAVEPOINT SCHEMA SCHEMAS SCROLL SEARCH SECOND_P SECRET_ACCESS_KEY SECURITY SELECT SEQUENCE SEQUENCES
+	SERIALIZABLE SERVER SESSION SESSION_TOKEN SESSION_USER SET SETS SETOF SHARE SHOW
+	SIMILAR SIMPLE SKIP SMALLINT SNAPSHOT SOME SORTKEY SQL_P STABLE STANDALONE_P
 	START STATEMENT STATISTICS STDIN STDOUT STORAGE STRICT_P STRIP_P
 	SUBSCRIPTION SUBSTRING SYMMETRIC SYSID SYSTEM_P
 
@@ -676,7 +678,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	TIME TIMESTAMP TO TRAILING TRANSACTION TRANSFORM TREAT TRIGGER TRIM TRUE_P
 	TRUNCATE TRUSTED TYPE_P TYPES_P
 
-	UNBOUNDED UNCOMMITTED UNENCRYPTED UNION UNIQUE UNKNOWN UNLISTEN UNLOGGED
+	UNBOUNDED UNCOMMITTED UNENCRYPTED UNION UNIQUE UNKNOWN UNLISTEN UNLOAD UNLOGGED
 	UNTIL UPDATE USER USING
 
 	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARYING
@@ -927,6 +929,7 @@ stmt :
 			| TransactionStmt
 			| TruncateStmt
 			| UnlistenStmt
+			| UnloadStmt
 			| UpdateStmt
 			| VacuumStmt
 			| VariableResetStmt
@@ -2956,6 +2959,14 @@ copy_opt_item:
 				{
 					$$ = makeDefElem("encoding", (Node *)makeString($2), @1);
 				}
+			| CREDENTIALS Sconst
+				{
+					$$ = NULL;
+				}
+			| IGNOREHEADER AS Iconst
+				{
+					$$ = NULL;
+				} 
 		;
 
 /* The following exist for backward compatibility with very old versions */
@@ -3041,7 +3052,7 @@ copy_generic_opt_arg_list_item:
  *****************************************************************************/
 
 CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
-			OptInherit OptPartitionSpec OptWith OnCommitOption OptTableSpace
+			OptInherit OptPartitionSpec OptWith OnCommitOption OptTableSpace OptDistStyle OptDistKey OptSortKey
 				{
 					CreateStmt *n = makeNode(CreateStmt);
 					$4->relpersistence = $2;
@@ -3059,7 +3070,7 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 				}
 		| CREATE OptTemp TABLE IF_P NOT EXISTS qualified_name '('
 			OptTableElementList ')' OptInherit OptPartitionSpec OptWith
-			OnCommitOption OptTableSpace
+			OnCommitOption OptTableSpace OptDistStyle OptDistKey OptSortKey
 				{
 					CreateStmt *n = makeNode(CreateStmt);
 					$7->relpersistence = $2;
@@ -3077,7 +3088,7 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 				}
 		| CREATE OptTemp TABLE qualified_name OF any_name
 			OptTypedTableElementList OptPartitionSpec OptWith OnCommitOption
-			OptTableSpace
+			OptTableSpace OptDistStyle OptDistKey OptSortKey
 				{
 					CreateStmt *n = makeNode(CreateStmt);
 					$4->relpersistence = $2;
@@ -3096,7 +3107,7 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 				}
 		| CREATE OptTemp TABLE IF_P NOT EXISTS qualified_name OF any_name
 			OptTypedTableElementList OptPartitionSpec OptWith OnCommitOption
-			OptTableSpace
+			OptTableSpace OptDistStyle OptDistKey OptSortKey
 				{
 					CreateStmt *n = makeNode(CreateStmt);
 					$7->relpersistence = $2;
@@ -3115,7 +3126,7 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 				}
 		| CREATE OptTemp TABLE qualified_name PARTITION OF qualified_name
 			OptTypedTableElementList ForValues OptPartitionSpec OptWith
-			OnCommitOption OptTableSpace
+			OnCommitOption OptTableSpace OptDistStyle OptDistKey OptSortKey
 				{
 					CreateStmt *n = makeNode(CreateStmt);
 					$4->relpersistence = $2;
@@ -3134,7 +3145,7 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 				}
 		| CREATE OptTemp TABLE IF_P NOT EXISTS qualified_name PARTITION OF
 			qualified_name OptTypedTableElementList ForValues OptPartitionSpec
-			OptWith OnCommitOption OptTableSpace
+			OptWith OnCommitOption OptTableSpace OptDistStyle OptDistKey OptSortKey
 				{
 					CreateStmt *n = makeNode(CreateStmt);
 					$7->relpersistence = $2;
@@ -3351,6 +3362,30 @@ ColConstraintElem:
 					n->location = @1;
 					$$ = (Node *)n;
 				}
+			| DISTKEY
+				{
+					
+					Constraint *n = makeNode(Constraint);
+					n->contype = CONSTR_NULL;
+					n->location = @1;
+					$$ = (Node *)n;
+				}
+			| SORTKEY
+				{
+					
+					Constraint *n = makeNode(Constraint);
+					n->contype = CONSTR_NULL;
+					n->location = @1;
+					$$ = (Node *)n;
+				}
+			| ENCODE any_name 
+				{
+					
+					Constraint *n = makeNode(Constraint);
+					n->contype = CONSTR_NULL;
+					n->location = @1;
+					$$ = (Node *)n;
+				}
 			| UNIQUE opt_definition OptConsTableSpace
 				{
 					Constraint *n = makeNode(Constraint);
@@ -3418,6 +3453,7 @@ ColConstraintElem:
 					n->initially_valid  = true;
 					$$ = (Node *)n;
 				}
+			
 		;
 
 generated_when:
@@ -3489,13 +3525,12 @@ TableLikeOptionList:
 		;
 
 TableLikeOption:
-				COMMENTS			{ $$ = CREATE_TABLE_LIKE_COMMENTS; }
+				DEFAULTS			{ $$ = CREATE_TABLE_LIKE_DEFAULTS; }
 				| CONSTRAINTS		{ $$ = CREATE_TABLE_LIKE_CONSTRAINTS; }
-				| DEFAULTS			{ $$ = CREATE_TABLE_LIKE_DEFAULTS; }
 				| IDENTITY_P		{ $$ = CREATE_TABLE_LIKE_IDENTITY; }
 				| INDEXES			{ $$ = CREATE_TABLE_LIKE_INDEXES; }
-				| STATISTICS		{ $$ = CREATE_TABLE_LIKE_STATISTICS; }
 				| STORAGE			{ $$ = CREATE_TABLE_LIKE_STORAGE; }
+				| COMMENTS			{ $$ = CREATE_TABLE_LIKE_COMMENTS; }
 				| ALL				{ $$ = CREATE_TABLE_LIKE_ALL; }
 		;
 
@@ -3803,6 +3838,23 @@ OnCommitOption:  ON COMMIT DROP				{ $$ = ONCOMMIT_DROP; }
 OptTableSpace:   TABLESPACE name					{ $$ = $2; }
 			| /*EMPTY*/								{ $$ = NULL; }
 		;
+
+OptDistStyle:	DISTSTYLE ALL 				{$$ = NULL; }
+	    	| DISTSTYLE EVEN 			{$$ = NULL; }
+		| DISTSTYLE KEY 			{$$ = NULL; }
+		| /*EMPTY*/				{$$ = NULL; }
+		;
+
+OptDistKey:	 DISTKEY '(' ColId ')'			{$$ = NULL; }
+	  	| /*EMPTY*/				{$$ = NULL; }
+		;
+
+OptSortKey:	INTERLEAVED SORTKEY '(' columnList ')'	{$$=NULL; }
+	  	| COMPOUND SORTKEY '(' columnList ')' 	{$$ = NULL; }
+		| SORTKEY '(' columnList ')'		{ $$ = NULL; }
+	  	|/*EMPTY*/				{$$ = NULL; }
+		;
+
 
 OptConsTableSpace:   USING INDEX TABLESPACE name	{ $$ = $4; }
 			| /*EMPTY*/								{ $$ = NULL; }
@@ -6217,6 +6269,70 @@ opt_restart_seqs:
 			| RESTART IDENTITY_P		{ $$ = true; }
 			| /* EMPTY */				{ $$ = false; }
 		;
+
+/************************************************************************************************
+ *
+ *		QUERY:
+ *				UNLOAD ( 'select-statement' ) TO 's3://object-path/filename prefix'
+ *				authorization
+ *				[ option [ ... ]]
+ *				
+ *				Where option is
+ *
+ *					{ MANIFEST
+ *					| DELIMITER [ AS ] 'delimiter-char'
+ *					| FIXEDWIDTH [ AS ] 'fixedwidth-spec' }
+ *					| ENCRYPTED
+ *					| BZIP2
+ *					| GZIP
+ *					| ADDQUOTES
+ *					| NULL [ AS ] 'null-string'
+ *					| ESCAPE
+ *					| ALLOWOVERWRITE
+ *					| PARALLEL [ { ON | TRUE } | { OFF | FALSE } ] [ MAXFILESIZE [AS] max-size [ MB | GB ] ]
+ *				
+ *
+ ***********************************************************************************************/
+
+UnloadStmt:	UNLOAD '(' Sconst ')' TO Sconst AwsAuth OptUnloadOption		{$$ = NULL; }
+	  ;
+
+AwsAuth:	 IAM_ROLE Sconst 				{ $$ = NULL; }
+       		| ACCESS_KEY_ID Sconst SECRET_ACCESS_KEY Sconst { $$ = NULL; }
+		| CREDENTIALS Sconst 				{ $$ = NULL; }
+		;
+
+OptUnloadOption: OptUnloadOption UnloadOption			{ $$ = NULL; }
+		| /*EMPTY*/					{ $$ = NULL; }
+		;
+
+UnloadOption: MANIFEST
+	        | DELIMITER AS Sconst				{ $$=NULL; }
+	        | FIXEDWIDTH AS Sconst
+		| ENCRYPTED 
+		| BZIP2 
+		| GZIP 
+		| ADDQUOTES 
+		| ESCAPE 
+		| ALLOWOVERWRITE 
+		| OptParallel
+		;
+
+OptParallel: 
+	   	PARALLEL TrueClause
+		| PARALLEL FalseClause
+		;
+
+TrueClause:
+	  	ON
+		| TRUE_P
+		;
+
+FalseClause:	
+	   	OFF
+		| FALSE_P
+		;
+
 
 /*****************************************************************************
  *
@@ -12342,6 +12458,7 @@ CharacterWithLength:  character '(' Iconst ')'
 		;
 
 CharacterWithoutLength:	 character
+		        | character '(' MAX ')'
 				{
 					$$ = SystemTypeName($1);
 					/* char defaults to char(1), varchar to no limit */
@@ -14588,11 +14705,14 @@ unreserved_keyword:
 			  ABORT_P
 			| ABSOLUTE_P
 			| ACCESS
+			| ACCESS_KEY_ID
 			| ACTION
 			| ADD_P
+			| ADDQUOTES
 			| ADMIN
 			| AFTER
 			| AGGREGATE
+			| ALLOWOVERWRITE
 			| ALSO
 			| ALTER
 			| ALWAYS
@@ -14605,6 +14725,7 @@ unreserved_keyword:
 			| BEFORE
 			| BEGIN_P
 			| BY
+			| BZIP2
 			| CACHE
 			| CALLED
 			| CASCADE
@@ -14621,6 +14742,7 @@ unreserved_keyword:
 			| COMMENTS
 			| COMMIT
 			| COMMITTED
+			| COMPOUND
 			| CONFIGURATION
 			| CONFLICT
 			| CONNECTION
@@ -14630,6 +14752,7 @@ unreserved_keyword:
 			| CONVERSION_P
 			| COPY
 			| COST
+			| CREDENTIALS
 			| CSV
 			| CUBE
 			| CURRENT_P
@@ -14661,6 +14784,7 @@ unreserved_keyword:
 			| ENCRYPTED
 			| ENUM_P
 			| ESCAPE
+			| EVEN
 			| EVENT
 			| EXCLUDE
 			| EXCLUDING
@@ -14672,6 +14796,7 @@ unreserved_keyword:
 			| FAMILY
 			| FILTER
 			| FIRST_P
+			| FIXEDWIDTH
 			| FOLLOWING
 			| FORCE
 			| FORWARD
@@ -14680,12 +14805,15 @@ unreserved_keyword:
 			| GENERATED
 			| GLOBAL
 			| GRANTED
+			| GZIP
 			| HANDLER
 			| HEADER_P
 			| HOLD
 			| HOUR_P
+			| IAM_ROLE
 			| IDENTITY_P
 			| IF_P
+			| IGNOREHEADER
 			| IMMEDIATE
 			| IMMUTABLE
 			| IMPLICIT_P
@@ -14701,6 +14829,7 @@ unreserved_keyword:
 			| INSENSITIVE
 			| INSERT
 			| INSTEAD
+			| INTERLEAVED
 			| INVOKER
 			| ISOLATION
 			| KEY
@@ -14720,6 +14849,8 @@ unreserved_keyword:
 			| MAPPING
 			| MATCH
 			| MATERIALIZED
+			| MAX
+			| MAXFILESIZE
 			| MAXVALUE
 			| METHOD
 			| MINUTE_P
@@ -14799,12 +14930,14 @@ unreserved_keyword:
 			| SCROLL
 			| SEARCH
 			| SECOND_P
+			| SECRET_ACCESS_KEY
 			| SECURITY
 			| SEQUENCE
 			| SEQUENCES
 			| SERIALIZABLE
 			| SERVER
 			| SESSION
+			| SESSION_TOKEN
 			| SET
 			| SETS
 			| SHARE
@@ -15002,8 +15135,11 @@ reserved_keyword:
 			| DEFERRABLE
 			| DESC
 			| DISTINCT
+			| DISTKEY
+			| DISTSTYLE
 			| DO
 			| ELSE
+			| ENCODE
 			| END_P
 			| EXCEPT
 			| FALSE_P
@@ -15023,6 +15159,7 @@ reserved_keyword:
 			| LIMIT
 			| LOCALTIME
 			| LOCALTIMESTAMP
+			| MANIFEST
 			| NOT
 			| NULL_P
 			| OFFSET
@@ -15037,6 +15174,7 @@ reserved_keyword:
 			| SELECT
 			| SESSION_USER
 			| SOME
+			| SORTKEY
 			| SYMMETRIC
 			| TABLE
 			| THEN
@@ -15045,6 +15183,7 @@ reserved_keyword:
 			| TRUE_P
 			| UNION
 			| UNIQUE
+			| UNLOAD
 			| USER
 			| USING
 			| VARIADIC

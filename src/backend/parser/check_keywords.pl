@@ -174,14 +174,14 @@ kwlist_line: while (<$kwlist>)
 		$prevkwstring = $kwstring;
 
 		# Check that the keyword string is valid: all lower-case ASCII chars
-		if ($kwstring !~ /^[a-z_]+$/)
+		if ($kwstring !~ /^[a-z_2]+$/)
 		{
 			error
 "'$kwstring' is not a valid keyword string, must be all lower-case ASCII chars";
 		}
 
 		# Check that the keyword name is valid: all upper-case ASCII chars
-		if ($kwname !~ /^[A-Z_]+$/)
+		if ($kwname !~ /^[A-Z_2]+$/)
 		{
 			error
 "'$kwname' is not a valid keyword name, must be all upper-case ASCII chars";
